@@ -20,7 +20,43 @@
 
 const volatile enum basic_program_mode prog_mode = BASIC_NO_TOUCH;
 const volatile bool rxq_stats = 0;
+const volatile bool xdp_load_bytes = 0;
 const volatile enum xdp_action action = XDP_DROP;
+
+static int parse_ip_header_load(struct xdp_md *ctx)
+{
+	int eth_type, ip_type, err, offset = 0;
+	struct ipv6hdr ipv6hdr;
+	struct iphdr iphdr;
+	struct ethhdr eth;
+
+	err = bpf_xdp_load_bytes(ctx, offset, &eth, sizeof(eth));
+	if (err)
+		return err;
+
+	eth_type = eth.h_proto;
+	offset = sizeof(eth);
+
+	if (eth_type == bpf_htons(ETH_P_IP)) {
+		err = bpf_xdp_load_bytes(ctx, offset, &iphdr, sizeof(iphdr));
+		if (err)
+			return err;
+
+		ip_type = iphdr.protocol;
+		if (ip_type < 0)
+			return ip_type;
+	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
+		err = bpf_xdp_load_bytes(ctx, offset, &ipv6hdr, sizeof(ipv6hdr));
+		if (err)
+			return err;
+
+		ip_type = ipv6hdr.nexthdr;
+		if (ip_type < 0)
+			return ip_type;
+	}
+
+	return 0;
+}
 
 static int parse_ip_header(struct xdp_md *ctx)
 {
@@ -31,6 +67,9 @@ static int parse_ip_header(struct xdp_md *ctx)
 	struct iphdr *iphdr;
 	struct ethhdr *eth;
 	int eth_type, ip_type;
+
+	if (xdp_load_bytes)
+		return parse_ip_header_load(ctx);
 
 	eth_type = parse_ethhdr(&nh, data_end, &eth);
 	if (eth_type < 0)
